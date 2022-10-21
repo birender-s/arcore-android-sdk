@@ -16,24 +16,42 @@
 
 package com.google.ar.core.examples.java.rawdepth;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.media.Image;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
+import android.opengl.Matrix;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.widget.SeekBar;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import com.google.ar.core.Anchor;
 import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.Camera;
 import com.google.ar.core.Config;
+import com.google.ar.core.DepthPoint;
 import com.google.ar.core.Frame;
+import com.google.ar.core.HitResult;
+import com.google.ar.core.InstantPlacementPoint;
+import com.google.ar.core.Plane;
+import com.google.ar.core.Point;
+import com.google.ar.core.Pose;
 import com.google.ar.core.Session;
+import com.google.ar.core.Trackable;
 import com.google.ar.core.TrackingState;
+import com.google.ar.core.examples.java.Mesh;
 import com.google.ar.core.examples.java.common.helpers.CameraPermissionHelper;
 import com.google.ar.core.examples.java.common.helpers.DisplayRotationHelper;
 import com.google.ar.core.examples.java.common.helpers.FullScreenHelper;
+import com.google.ar.core.examples.java.common.helpers.InstantPlacementSettings;
 import com.google.ar.core.examples.java.common.helpers.SnackbarHelper;
+import com.google.ar.core.examples.java.common.helpers.TapHelper;
 import com.google.ar.core.examples.java.common.helpers.TrackingStateHelper;
 import com.google.ar.core.exceptions.CameraNotAvailableException;
 import com.google.ar.core.exceptions.NotYetAvailableException;
@@ -42,7 +60,12 @@ import com.google.ar.core.exceptions.UnavailableArcoreNotInstalledException;
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException;
 import com.google.ar.core.exceptions.UnavailableSdkTooOldException;
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException;
+import com.google.ar.sceneform.AnchorNode;
+
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
@@ -58,6 +81,30 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
 
   private boolean installRequested;
   private boolean depthReceived;
+  private TapHelper tapHelper;
+  private final InstantPlacementSettings instantPlacementSettings = new InstantPlacementSettings();
+  private final List<WrappedAnchor> wrappedAnchors = new ArrayList<>();
+  private Mesh virtualObjectMesh;
+
+  // Assumed distance from the device camera to the surface on which user will try to place objects.
+  // This value affects the apparent scale of objects while the tracking method of the
+  // Instant Placement point is SCREENSPACE_WITH_APPROXIMATE_DISTANCE.
+  // Values in the [0.2, 2.0] meter range are a good choice for most AR experiences. Use lower
+  // values for AR experiences where users are expected to place objects on surfaces close to the
+  // camera. Use larger values for experiences where the user will likely be standing and trying to
+  // place an object on the ground or floor in front of them.
+  private static final float APPROXIMATE_DISTANCE_METERS = 2.0f;
+
+  // Temporary matrix allocated here to reduce number of allocations for each frame.
+  private final float[] modelMatrix = new float[16];
+  private final float[] viewMatrix = new float[16];
+  private final float[] projectionMatrix = new float[16];
+  private final float[] modelViewMatrix = new float[16]; // view x model
+  private final float[] modelViewProjectionMatrix = new float[16]; // projection x view x model
+  private final float[] sphericalHarmonicsCoefficients = new float[9 * 3];
+  private final float[] viewInverseMatrix = new float[16];
+  private final float[] worldLightDirection = {0.0f, 0.0f, 0.0f, 0.0f};
+  private final float[] viewLightDirection = new float[4]; // view x world light direction
 
   private Session session;
   private final SnackbarHelper messageSnackbarHelper = new SnackbarHelper();
@@ -78,6 +125,16 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
     setContentView(R.layout.activity_main);
     surfaceView = findViewById(R.id.surfaceview);
     displayRotationHelper = new DisplayRotationHelper(/*context=*/ this);
+
+    if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
+            PackageManager.PERMISSION_GRANTED) {
+      ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.CAMERA},
+              50); }
+
+    // Set up touch listener.
+    tapHelper = new TapHelper(/*context=*/ this);
+    surfaceView.setOnTouchListener(tapHelper);
+    instantPlacementSettings.onCreate(this);
 
     // Set up rendering.
     surfaceView.setPreserveEGLContextOnPause(true);
@@ -187,6 +244,13 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
         // Enable raw depth estimation and auto focus mode while ARCore is running.
         Config config = session.getConfig();
         config.setDepthMode(Config.DepthMode.RAW_DEPTH_ONLY);
+
+        if (instantPlacementSettings.isInstantPlacementEnabled()) {
+          config.setInstantPlacementMode(Config.InstantPlacementMode.LOCAL_Y_UP);
+        } else {
+          config.setInstantPlacementMode(Config.InstantPlacementMode.DISABLED);
+        }
+
         session.configure(config);
         session.resume();
       }
@@ -242,6 +306,9 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
     // Prepare the rendering objects. This involves reading shaders, so may throw an IOException.
     try {
       renderer.createOnGlThread(/*context=*/ this);
+
+      virtualObjectMesh = Mesh.createFromAsset(getAssets(), "models/pawn.obj");
+
     } catch (IOException e) {
       Log.e(TAG, "Failed to read an asset file", e);
     }
@@ -272,6 +339,11 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
 
         Frame frame = session.update();
         Camera camera = frame.getCamera();
+
+        // Handle one tap per frame.
+        handleTap(frame, camera);
+
+
 
         // Keep the screen unlocked while tracking, but allow it to lock when tracking stops.
         trackingStateHelper.updateKeepScreenOnFlag(camera.getTrackingState());
@@ -319,6 +391,48 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
         // Visualize depth points.
         renderer.draw(viewMatrix, projectionMatrix);
 
+//        Pose mCameraRelativePose=Pose.makeTranslation(0.0f, 0.0f, -0.5f);
+//        Anchor myAnchor = session.createAnchor(mCameraRelativePose);
+////        AnchorNode anchorNode = new AnchorNode(myAnchor);
+////        anchorNode.setParent(frame.;
+//
+
+        // Visualize anchors created by touch.
+//        renderer.clear(virtualSceneFramebuffer, 0f, 0f, 0f, 0f);
+        for (WrappedAnchor wrappedAnchor : wrappedAnchors) {
+          Anchor anchor = wrappedAnchor.getAnchor();
+          Trackable trackable = wrappedAnchor.getTrackable();
+          if (anchor.getTrackingState() != TrackingState.TRACKING) {
+            continue;
+          }
+
+          // Get the current pose of an Anchor in world space. The Anchor pose is updated
+          // during calls to session.update() as ARCore refines its estimate of the world.
+          anchor.getPose().toMatrix(modelMatrix, 0);
+
+          // Calculate model/view/projection matrices
+          Matrix.multiplyMM(modelViewMatrix, 0, viewMatrix, 0, modelMatrix, 0);
+          Matrix.multiplyMM(modelViewProjectionMatrix, 0, projectionMatrix, 0, modelViewMatrix, 0);
+
+//          // Update shader properties and draw
+//          virtualObjectShader.setMat4("u_ModelView", modelViewMatrix);
+//          virtualObjectShader.setMat4("u_ModelViewProjection", modelViewProjectionMatrix);
+//
+//          if (trackable instanceof InstantPlacementPoint
+//                  && ((InstantPlacementPoint) trackable).getTrackingMethod()
+//                  == InstantPlacementPoint.TrackingMethod.SCREENSPACE_WITH_APPROXIMATE_DISTANCE) {
+//            virtualObjectShader.setTexture(
+//                    "u_AlbedoTexture", virtualObjectAlbedoInstantPlacementTexture);
+//          } else {
+//            virtualObjectShader.setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture);
+//          }
+
+
+//          render.draw(virtualObjectMesh, virtualObjectShader, virtualSceneFramebuffer);
+          virtualObjectMesh.lowLevelDraw();
+        }
+
+
         // Hide all user notifications when the frame has been rendered successfully.
         messageSnackbarHelper.hide(this);
       } catch (Throwable t) {
@@ -326,5 +440,97 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
         Log.e(TAG, "Exception on the OpenGL thread", t);
       }
     }
+  }
+
+
+  // Handle only one tap per frame, as taps are usually low frequency compared to frame rate.
+  private void handleTap(Frame frame, Camera camera) {
+    MotionEvent tap = tapHelper.poll();
+    if (tap != null && camera.getTrackingState() == TrackingState.TRACKING) {
+      List<HitResult> hitResultList;
+      if (instantPlacementSettings.isInstantPlacementEnabled()) {
+        hitResultList =
+                frame.hitTestInstantPlacement(tap.getX(), tap.getY(), APPROXIMATE_DISTANCE_METERS);
+      } else {
+        hitResultList = frame.hitTest(tap);
+      }
+      for (HitResult hit : hitResultList) {
+        // If any plane, Oriented Point, or Instant Placement Point was hit, create an anchor.
+        Trackable trackable = hit.getTrackable();
+        // If a plane was hit, check that it was hit inside the plane polygon.
+        // DepthPoints are only returned if Config.DepthMode is set to AUTOMATIC.
+        if ((trackable instanceof Plane
+                && ((Plane) trackable).isPoseInPolygon(hit.getHitPose())
+                /* && (PlaneRenderer.calculateDistanceToPlane(hit.getHitPose(), camera.getPose()) > 0) */ )
+                || (trackable instanceof Point
+                && ((Point) trackable).getOrientationMode()
+                == Point.OrientationMode.ESTIMATED_SURFACE_NORMAL)
+                || (trackable instanceof InstantPlacementPoint)
+                || (trackable instanceof DepthPoint)) {
+          // Cap the number of objects created. This avoids overloading both the
+          // rendering system and ARCore.
+          if (wrappedAnchors.size() >= 20) {
+            wrappedAnchors.get(0).getAnchor().detach();
+            wrappedAnchors.remove(0);
+          }
+
+          // Adding an Anchor tells ARCore that it should track this position in
+          // space. This anchor is created on the Plane to place the 3D model
+          // in the correct position relative both to the world and to the plane.
+          wrappedAnchors.add(new WrappedAnchor(hit.createAnchor(), trackable));
+          // For devices that support the Depth API, shows a dialog to suggest enabling
+          // depth-based occlusion. This dialog needs to be spawned on the UI thread.
+//          this.runOnUiThread(this::showOcclusionDialogIfNeeded);
+
+          // Hits are sorted by depth. Consider only closest hit on a plane, Oriented Point, or
+          // Instant Placement Point.
+          break;
+        }
+      }
+    }
+  }
+
+
+
+  /** Configures the session with feature settings. */
+  private void configureSession() {
+    Config config = session.getConfig();
+    config.setLightEstimationMode(Config.LightEstimationMode.ENVIRONMENTAL_HDR);
+    if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+      config.setDepthMode(Config.DepthMode.AUTOMATIC);
+    } else {
+      config.setDepthMode(Config.DepthMode.DISABLED);
+    }
+    if (instantPlacementSettings.isInstantPlacementEnabled()) {
+      config.setInstantPlacementMode(Config.InstantPlacementMode.LOCAL_Y_UP);
+    } else {
+      config.setInstantPlacementMode(Config.InstantPlacementMode.DISABLED);
+    }
+    session.configure(config);
+  }
+
+
+}
+
+
+/**
+ * Associates an Anchor with the trackable it was attached to. This is used to be able to check
+ * whether or not an Anchor originally was attached to an {@link InstantPlacementPoint}.
+ */
+class WrappedAnchor {
+  private Anchor anchor;
+  private Trackable trackable;
+
+  public WrappedAnchor(Anchor anchor, Trackable trackable) {
+    this.anchor = anchor;
+    this.trackable = trackable;
+  }
+
+  public Anchor getAnchor() {
+    return anchor;
+  }
+
+  public Trackable getTrackable() {
+    return trackable;
   }
 }
