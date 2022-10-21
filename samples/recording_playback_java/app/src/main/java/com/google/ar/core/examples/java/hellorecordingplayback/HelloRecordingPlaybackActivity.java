@@ -17,6 +17,7 @@
 package com.google.ar.core.examples.java.hellorecordingplayback;
 
 import android.Manifest.permission;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -25,6 +26,7 @@ import android.opengl.GLSurfaceView;
 import android.os.Build;
 import android.os.Build.VERSION_CODES;
 import android.os.Bundle;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
@@ -83,6 +85,11 @@ import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 import org.joda.time.DateTime;
 
+import static android.Manifest.permission.ACCESS_COARSE_LOCATION;
+import static android.Manifest.permission.READ_PHONE_NUMBERS;
+import static android.Manifest.permission.READ_PHONE_STATE;
+import static android.Manifest.permission.READ_SMS;
+
 /**
  * This is a simple example that shows how to create an augmented reality (AR) app that demonstrates
  * recording and playback of the AR session:
@@ -103,6 +110,8 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
     RECORDING,
     PLAYBACK
   }
+
+  private static final int PERMISSION_REQUEST_CODE = 100;
 
   private static final String TAG = HelloRecordingPlaybackActivity.class.getSimpleName();
 
@@ -141,6 +150,8 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
   private Button startPlaybackButton;
   private Button stopPlaybackButton;
   private TextView recordingPlaybackPathTextView;
+  private TextView textView;
+  TelephonyManager telephonyManager;
 
   private Session session;
   private final SnackbarHelper messageSnackbarHelper = new SnackbarHelper();
@@ -210,6 +221,19 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
     stopRecordingButton.setOnClickListener(view -> stopRecording());
     startPlaybackButton.setOnClickListener(view -> startPlayback());
     stopPlaybackButton.setOnClickListener(view -> stopPlayback());
+    textView = findViewById(R.id.textView);
+
+    telephonyManager = (TelephonyManager) this.getSystemService(Context.TELEPHONY_SERVICE);
+    if (ActivityCompat.checkSelfPermission(this, READ_SMS) != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(this, READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(this, ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(this, READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+      ActivityCompat.requestPermissions(this, new String[]{READ_SMS, READ_PHONE_NUMBERS, READ_PHONE_STATE,ACCESS_COARSE_LOCATION}, PERMISSION_REQUEST_CODE);
+    } else {
+      textView.setText(""+telephonyManager.getSignalStrength());
+    }
+
+
     updateUI();
   }
 
@@ -494,7 +518,12 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
 
 //          ColoredAnchor anchor = new ColoredAnchor(hit.createAnchor(), objColor);
 //      ColoredAnchor anchor = new ColoredAnchor(session.createAnchor(new Pose(position, rotation)), objColor);
-          ColoredAnchor anchor = new ColoredAnchor(session.createAnchor(camera.getDisplayOrientedPose()), objColor);
+
+
+      /*
+      Create an anchor in front of the camera without having to tie it to a frame.
+       */
+      ColoredAnchor anchor = new ColoredAnchor(session.createAnchor(camera.getDisplayOrientedPose()), objColor);
           // Adding an Anchor tells ARCore that it should track this position in
           // space. This anchor is created on the Plane to place the 3D model
           // in the correct position relative both to the world and to the plane.
