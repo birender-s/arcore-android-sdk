@@ -395,7 +395,12 @@ public class RawDepthActivity extends AppCompatActivity implements GLSurfaceView
 //        Anchor myAnchor = session.createAnchor(mCameraRelativePose);
 ////        AnchorNode anchorNode = new AnchorNode(myAnchor);
 ////        anchorNode.setParent(frame.;
-//
+
+//        //Add an Anchor and a renderable in front of the camera
+//        float[] pos = { 0, 0, -1 };
+//        float[] rotation = { 0, 0, 0, 1 };
+//        Anchor anchor =  session.createAnchor(new Pose(pos, rotation));
+
 
         // Visualize anchors created by touch.
 //        renderer.clear(virtualSceneFramebuffer, 0f, 0f, 0f, 0f);

@@ -129,7 +129,7 @@ final class Renderer {
     // Cap the total number of depth frames and anchors to avoid memory exhaustion (each depth frame
     // consumes memory). ARCore consumes CPU cycles for each anchor that it tracks, and this cap
     // avoids overloading the app rendering system.
-    final int maxFramesStored = 60;   // 2000
+    final int maxFramesStored = 2000;   // 60
     while (depthFrames.size() > maxFramesStored) {
       depthFrames.get(0).getAnchor().detach();
       depthFrames.remove(0);
