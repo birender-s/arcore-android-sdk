@@ -331,7 +331,7 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
       planeRenderer.createOnGlThread(/*context=*/ this, "models/trigrid.png");
       pointCloudRenderer.createOnGlThread(/*context=*/ this);
 
-      virtualObject.createOnGlThread(/*context=*/ this, "models/andy.obj", "models/andy.png");
+      virtualObject.createOnGlThread(/*context=*/ this, "models/anchor.obj", "models/anchor.png");
       virtualObject.setMaterialProperties(0.0f, 2.0f, 0.5f, 6.0f);
 
       virtualObjectShadow.createOnGlThread(
@@ -457,19 +457,19 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
 
   /** Try to create an anchor if the user has tapped the screen. */
   private ColoredAnchor handleTap(Frame frame, Camera camera) {
-    // Handle only one tap per frame, as taps are usually low frequency compared to frame rate.
+//    // Handle only one tap per frame, as taps are usually low frequency compared to frame rate.
     MotionEvent tap = tapHelper.poll();
     if (tap != null && camera.getTrackingState() == TrackingState.TRACKING) {
-      for (HitResult hit : frame.hitTest(tap)) {
-        // Check if any plane was hit, and if it was hit inside the plane polygon.
-        Trackable trackable = hit.getTrackable();
-        // Creates an anchor if a plane or an oriented point was hit.
-        if ((trackable instanceof Plane
-                && ((Plane) trackable).isPoseInPolygon(hit.getHitPose())
-                && (PlaneRenderer.calculateDistanceToPlane(hit.getHitPose(), camera.getPose()) > 0))
-            || (trackable instanceof Point
-                && ((Point) trackable).getOrientationMode()
-                    == OrientationMode.ESTIMATED_SURFACE_NORMAL)) {
+//      for (HitResult hit : frame.hitTest(tap)) {
+//        // Check if any plane was hit, and if it was hit inside the plane polygon.
+//        Trackable trackable = hit.getTrackable();
+//        // Creates an anchor if a plane or an oriented point was hit.
+//        if ((trackable instanceof Plane
+//                && ((Plane) trackable).isPoseInPolygon(hit.getHitPose())
+//                && (PlaneRenderer.calculateDistanceToPlane(hit.getHitPose(), camera.getPose()) > 0))
+//            || (trackable instanceof Point
+//                && ((Point) trackable).getOrientationMode()
+//                    == OrientationMode.ESTIMATED_SURFACE_NORMAL)) {
           // Hits are sorted by depth. Consider only closest hit on a plane or oriented point.
           // Cap the number of objects created. This avoids overloading both the
           // rendering system and ARCore.
@@ -481,22 +481,27 @@ public class HelloRecordingPlaybackActivity extends AppCompatActivity
           // Assign a color to the object for rendering based on the trackable type
           // this anchor attached to.
           float[] objColor;
-          if (trackable instanceof Point) {
-            objColor = new float[] {66.0f, 133.0f, 244.0f, 255.0f}; // Blue.
-          } else if (trackable instanceof Plane) {
-            objColor = new float[] {139.0f, 195.0f, 74.0f, 255.0f}; // Green.
-          } else {
+//          if (trackable instanceof Point) {
+//            objColor = new float[] {66.0f, 133.0f, 244.0f, 255.0f}; // Blue.
+//          } else if (trackable instanceof Plane) {
+//            objColor = new float[] {139.0f, 195.0f, 74.0f, 255.0f}; // Green.
+//          } else {
             objColor = DEFAULT_COLOR;
-          }
+//          }
 
-          ColoredAnchor anchor = new ColoredAnchor(hit.createAnchor(), objColor);
+      float[] position = { 0, 0, (float) -0.75};       // 75 cm away from camera
+      float[] rotation = { 0, 0, 0, 1 };
+
+//          ColoredAnchor anchor = new ColoredAnchor(hit.createAnchor(), objColor);
+//      ColoredAnchor anchor = new ColoredAnchor(session.createAnchor(new Pose(position, rotation)), objColor);
+          ColoredAnchor anchor = new ColoredAnchor(session.createAnchor(camera.getDisplayOrientedPose()), objColor);
           // Adding an Anchor tells ARCore that it should track this position in
           // space. This anchor is created on the Plane to place the 3D model
           // in the correct position relative both to the world and to the plane.
           anchors.add(anchor);
           return anchor;
-        }
-      }
+//        }
+//      }
     }
     return null;
   }
